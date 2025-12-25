@@ -1,4 +1,80 @@
 
+function canonicalizeUrl(input) {
+  try {
+    const u = new URL(input);
+    u.hash = "";
+    // normalize query ordering for stability
+    const params = new URLSearchParams(u.search);
+    const sorted = new URLSearchParams();
+    Array.from(params.keys()).sort().forEach(k => {
+      params.getAll(k).forEach(v => sorted.append(k, v));
+    });
+    u.search = sorted.toString() ? ("?" + sorted.toString()) : "";
+    let s = u.toString();
+    if (s.endsWith("/")) s = s.slice(0, -1);
+    return s;
+  } catch (e) {
+    return (input || "").split("#")[0].replace(/\/$/, "");
+  }
+}
+
+async function checkAlreadyApplied(userId, url) {
+  const norm = canonicalizeUrl(url);
+  const qs = new URLSearchParams({ user_id: userId, url: norm }).toString();
+  const res = await fetch("http://127.0.0.1:8000/v1/applications/exists?" + qs);
+  if (!res.ok) return null;
+  return await res.json();
+}
+
+function showToast(messageHtml) {
+  let t = document.getElementById("co_toast");
+  if (!t) {
+    t = document.createElement("div");
+    t.id = "co_toast";
+    t.style.position = "fixed";
+    t.style.right = "18px";
+    t.style.bottom = "86px";
+    t.style.zIndex = "2147483647";
+    document.documentElement.appendChild(t);
+  }
+  t.innerHTML = `<div class="co-alert co-alert-shake">${messageHtml}</div>`;
+  setTimeout(()=>t.querySelector(".co-alert")?.classList.remove("co-alert-shake"), 1200);
+  clearTimeout(window.__coToastTimer);
+  window.__coToastTimer = setTimeout(()=>{ t.innerHTML=""; }, 7000);
+}
+
+function applyAlreadyAppliedUI(rootEl, data) {
+  const hint = rootEl?.querySelector("#co_exists_hint");
+
+  if (!data?.exists) {
+    if (hint) {
+      hint.style.display = "none";
+      hint.textContent = "";
+    }
+    return;
+  }
+
+  const a = data.application || {};
+  const when = a.created_at ? new Date(a.created_at).toLocaleDateString() : "";
+
+  // inline hint (clean, visible, non-annoying)
+  if (hint) {
+    hint.textContent = when
+      ? `Already applied • ${when}`
+      : "Already applied";
+    hint.style.display = "block";
+  }
+
+  // shake root once (subtle)
+  if (rootEl) {
+    rootEl.classList.remove("co-root-shake");
+    void rootEl.offsetWidth;
+    rootEl.classList.add("co-root-shake");
+    setTimeout(()=>rootEl.classList.remove("co-root-shake"), 900);
+  }
+}
+
+
 function isLikelyJobPage() {
   const url = location.href;
   if (/\/jobs\//i.test(url)) return true;
@@ -94,8 +170,43 @@ async function populateUsers(root) {
       #${PANEL_ID} .co-action { margin-top: 10px; width:100%; padding: 10px; border:0; border-radius: 12px; cursor:pointer;
         background:#2563eb; color:#fff; font-weight:700; }
       #${PANEL_ID} .co-status { margin-top: 10px; font-size: 12px; white-space: pre-wrap; color:#111; }
-      #${PANEL_ID} .co-muted { color:#666; font-size: 11px; margin-top: 8px; }
-    `;
+      #${PANEL_ID} .co-muted { color:#666; font-size: 11px; margin-top: 8px; }   
+      #careeros-panel-root .co-alert{
+        background: rgba(220,38,38,.12);
+        border: 1px solid rgba(220,38,38,.45);
+        color: #7f1d1d;
+        padding: 10px 12px;
+        border-radius: 12px;
+        font-size: 12px;
+        line-height: 1.35;
+      }
+      #careeros-panel-root .co-alert strong{ color:#111; }
+      @keyframes co-shake { 
+        0%,100%{transform:translateX(0)} 
+        20%{transform:translateX(-6px)} 
+        40%{transform:translateX(6px)} 
+        60%{transform:translateX(-4px)} 
+        80%{transform:translateX(4px)} 
+      }
+      .co-alert-shake{ animation: co-shake .55s ease-in-out 0s 2; }
+      .co-root-shake{ animation: co-shake .55s ease-in-out 0s 2; }
+      #careeros-panel-root .co-exists-slot{
+        display:flex;
+        align-items:flex-end;
+      }
+      #careeros-panel-root .co-exists-hint{
+        width:100%;
+        padding:8px 10px;
+        border-radius:10px;
+        background: rgba(220,38,38,.10);
+        border: 1px solid rgba(220,38,38,.35);
+        color: #b91c1c;
+        font-size: 12px;
+        font-weight: 700;
+        line-height: 1.2;
+        text-align:center;
+      }
+      `;
     document.documentElement.appendChild(style);
   }
 
@@ -107,7 +218,7 @@ async function populateUsers(root) {
       <div class="co-card" style="display:none;">
         <div class="co-head">
           <div class="co-title"><img src="${chrome.runtime.getURL("assets/logo.png")}" alt="CareerOS" style="height:16px;width:auto;vertical-align:middle"/><span style="margin-left:8px;">Generate Resume (DOCX)</span></div>
-          <button class="co-x" type="button" aria-label="Close">×</button>
+          <button class="co-x" type="button" aria-label="Close">x</button>
         </div>
         <div class="co-body">
           <div class="co-row">
@@ -115,8 +226,10 @@ async function populateUsers(root) {
               <label>User ID</label>
               <select id="co_userId" class="co-input"></select>
             </div>
-            <div>
-          </div>
+
+            <div class="co-exists-slot">
+              <div id="co_exists_hint" class="co-exists-hint" style="display:none;"></div>
+            </div>
           </div>
           <label>Job URL</label>
           <input id="co_url" />
@@ -167,8 +280,14 @@ async function populateUsers(root) {
     function closeCard() { card.style.display = "none"; }
 
     btn.addEventListener("click", () => {
-     
       if (card.style.display === "none") {
+        (async () => {
+          try {
+            const uid = (localStorage.getItem("careeros_user_id") || els.userId?.value || "u1").trim();
+            const res = await checkAlreadyApplied(uid, els.url.value);
+            if (res?.exists) applyAlreadyAppliedUI(root, res);
+          } catch (e) {}
+        })();
          btn.innerHTML = `<img class="co-launch-logo" src="${chrome.runtime.getURL("assets/logo.png")}" />`;
         openCard();
       } else {
@@ -179,6 +298,28 @@ async function populateUsers(root) {
     closeBtn.addEventListener("click", closeCard);
 
     els.url.value = location.href;
+
+    // re-check already-applied when user edits URL manually
+    els.url.addEventListener("blur", async () => {
+      try {
+        const uid =
+          (localStorage.getItem("careeros_user_id") ||
+          els.userId?.value ||
+          "u1").trim();
+
+        const res = await checkAlreadyApplied(uid, els.url.value);
+        applyAlreadyAppliedUI(root, res);
+      } catch (e) {}
+    });
+
+    // already-applied check (runs immediately)
+    (async () => {
+      try {
+        const uid = (localStorage.getItem("careeros_user_id") || els.userId?.value || "u1").trim();
+        const res = await checkAlreadyApplied(uid, els.url.value);
+        if (res?.exists) applyAlreadyAppliedUI(root, res);
+      } catch (e) {}
+    })();
 
     async function loadSettings() {
       const data = await chrome.storage.local.get(["userId","company","position"]);
@@ -336,44 +477,3 @@ function renderHistory(panel) {
   });
 }
 
-(function careerosMount() {
-  try {
-    if (!isLikelyJobPage()) return;
-    if (document.getElementById("co_fab")) return;
-
-    const fab = document.createElement("div");
-    fab.id = "co_fab";
-    fab.className = "co-fab";
-    const img = document.createElement("img");
-    img.src = chrome.runtime.getURL("icons/icon48.png");
-    img.alt = "CareerOS";
-    fab.appendChild(img);
-
-    const panel = document.createElement("div");
-    panel.id = "co_panel";
-    panel.className = "co-panel";
-    panel.style.display = "none";
-    panel.innerHTML = `
-      <div class="co-header">
-        <div class="co-title"><img src="${chrome.runtime.getURL("icons/icon48.png")}"/><img src="${chrome.runtime.getURL("assets/logo.png")}" alt="CareerOS" style="height:18px;width:auto;display:block"/></div>
-        <button class="co-x" aria-label="Close">×</button>
-      </div>
-      <div class="co-body">
-        <div class="co-muted">Open/close. Your full form panel (if present) will also work.</div>
-        <div class="co-section">
-          <div style="font-weight:700;margin-bottom:6px">Recent</div>
-          <div id="co_history"></div>
-        </div>
-      </div>
-    `;
-    panel.querySelector(".co-x")?.addEventListener("click", () => { panel.style.display = "none"; });
-
-    fab.addEventListener("click", () => {
-      panel.style.display = (panel.style.display === "none") ? "block" : "none";
-      if (panel.style.display !== "none") renderHistory(panel);
-    });
-
-    document.body.appendChild(fab);
-    document.body.appendChild(panel);
-  } catch (e) {}
-})();
