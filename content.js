@@ -119,23 +119,20 @@ const BACKEND_DEFAULT = "http://127.0.0.1:8000";
 async function populateUsers(root) {
   const sel = root.querySelector("#co_userId");
   if (!sel || sel.tagName.toLowerCase() !== "select") return;
-
   try {
     const res = await fetch("http://127.0.0.1:8000/v1/users", {
       headers: { "X-Auth-Token": DEV_AUTH_TOKEN },
     });
     if (!res.ok) throw new Error(await res.text());
-
     const data = await res.json();
     const items = Array.isArray(data) ? data : (data.items || data.users || []);
-
     sel.innerHTML = "";
 
-    // admin mode option (batch apply)
-    const allOpt = document.createElement("option");
-    allOpt.value = "__all__";
-    allOpt.textContent = "All users (admin)";
-    sel.appendChild(allOpt);
+    // Admin convenience: allow selecting all linked users (batch generate)
+    const optAll = document.createElement("option");
+    optAll.value = "__all__";
+    optAll.textContent = "All users";
+    sel.appendChild(optAll);
 
     items.forEach((u) => {
       const id = u.id || u.user_id || u;
@@ -145,22 +142,12 @@ async function populateUsers(root) {
       opt.textContent = name ? `${name} (${id})` : String(id);
       sel.appendChild(opt);
     });
-
     const saved = localStorage.getItem("careeros_user_id") || "__all__";
-    sel.value = saved;
-
-    sel.addEventListener("change", async () => {
-      localStorage.setItem("careeros_user_id", sel.value);
-
-      // optional: re-check already-applied when user changes
-      try {
-        const res2 = await checkAlreadyApplied(sel.value, location.href);
-        applyAlreadyAppliedUI(root, res2);
-      } catch {}
-    });
+    sel.value = String(saved);
+    sel.addEventListener("change", () => localStorage.setItem("careeros_user_id", sel.value));
   } catch (e) {
-    sel.innerHTML = '<option value="u1">u1</option>';
-    sel.value = localStorage.getItem("careeros_user_id") || "u1";
+    sel.innerHTML = '<option value="__all__">All users</option><option value="u1">u1</option>';
+    sel.value = localStorage.getItem("careeros_user_id") || "__all__";
   }
 }
 
@@ -176,6 +163,7 @@ async function populateUsers(root) {
     "linkedin.com/jobs", "workday", "apply", "job description", "job posting"
   ];
   const looksLikeJobPage = jobHints.some(h => url.includes(h) || title.includes(h));
+
   function ensureStyles() {
     if (document.getElementById(STYLE_ID)) return;
     const style = document.createElement("style");
@@ -255,12 +243,10 @@ async function populateUsers(root) {
               <label>User ID</label>
               <select id="co_userId" class="co-input"></select>
             </div>
-
-            <div class="co-exists-slot">
-              <div id="co_exists_hint" class="co-exists-hint" style="display:none;"></div>
-            </div>
+            <div>
+</div>
           </div>
-          <label>Job URL</label>
+<label>Job URL</label>
           <input id="co_url" />
 
           <label>Company</label>
@@ -453,9 +439,8 @@ async function populateUsers(root) {
   return;
 }
 const docxUrl = b64ToBlobUrl(data.resume_docx_base64, mime);
-
-        const filename = `CareerOS/${userId}/${data.application_id}/resume.docx`;
-        const resp = await chrome.runtime.sendMessage({
+const filename = `CareerOS/${userId}/${data.application_id}/resume.docx`;
+const resp = await chrome.runtime.sendMessage({
   type: "DOWNLOAD_BLOB_URL",
   payload: { url: docxUrl, filename, saveAs: true },
 });
