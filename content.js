@@ -13,8 +13,7 @@
 //    - We add a shake class to the CARD element (.co-card) not root,
 //      and reflow to replay. This is the most reliable.
 //    - We also include keyframes and ensure no conflicting transforms.
-//
-// ✅ NEW FEATURES (requested):
+//    - Shake is triggered when ANY selected user has an existing application.
 // 3) Add "Source site" (human input like "indeed") and send to backend.
 // 4) Reduce cost: Extract JD keys once (cached server-side) via /v1/jd/keys,
 //    then pass jd_keys into /v1/ingest/apply-and-generate.
@@ -624,10 +623,8 @@ async function updateExistsForSelected(root, cardEl, jobUrl) {
               <div id="co_user_list" class="co-user-list"></div>
               <div class="co-muted" style="margin-top:6px;">Applied hint is on the right of the user ID line. Hover user id to see full id.</div>
             </div>
-
             <label>Source site</label>
             <input id="co_source_site" placeholder="indeed" />
-
             <label>Job URL</label>
             <input id="co_url" />
             <label>Company</label>
