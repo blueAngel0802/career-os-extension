@@ -5,7 +5,7 @@
 // - CO_API: proxy API requests through background fetch, inject X-Auth-Token
 // - DOWNLOAD_BLOB_URL: download blob/object URLs (or http URLs) via chrome.downloads
 
-const DEFAULT_BACKEND = "http://127.0.0.1:8000";
+const DEFAULT_BACKEND = "https://career-os.onrender.com";
 
 async function getConfig() {
   const { backend, authToken } = await chrome.storage.local.get([
