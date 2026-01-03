@@ -24,7 +24,7 @@
 // - Right badge shows: "Applied • 12/26/2025 • by TimothyTran"
 // - Press Enter on email/password triggers Login.
 
-const BACKEND_DEFAULT = "http://127.0.0.1:8000";
+const BACKEND_DEFAULT = "https://career-os.onrender.com";
 
 let CO_USER_MAP = new Map(); // user_id -> { id, name }
 let CO_ALL_USERS = []; // [{id, name}]

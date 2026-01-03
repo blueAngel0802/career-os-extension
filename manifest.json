@@ -5,8 +5,7 @@
   "description": "Auto-open CareerOS panel on job pages; resilient to SPA re-renders.",
   "permissions": ["downloads", "storage"],
   "host_permissions": [
-    "http://127.0.0.1:8000/*",
-    "http://localhost:8000/*",
+    "https://career-os.onrender.com/*",
     "https://*.greenhouse.io/*",
     "https://job-boards.greenhouse.io/*"
   ],
