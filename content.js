@@ -634,7 +634,20 @@ async function updateExistsForSelected(root, cardEl, jobUrl) {
             <label>Job Description (paste)</label>
             <textarea id="co_jd" placeholder="Paste full JD here..."></textarea>
 
-            <button class="co-action" id="co_generate" type="button">Generate</button>
+            
+            <label>Resume download</label>
+            <div class="co-row" style="display:flex; gap:8px; align-items:center;">
+              <select id="co_resume_format" style="flex:1;">
+                <option value="docx">DOCX</option>
+                <option value="pdf">PDF</option>
+                <option value="both">DOCX + PDF</option>
+              </select>
+              <label style="display:flex; align-items:center; gap:6px; font-size:12px; margin-top:4px; white-space:nowrap;">
+                <input id="co_cover_letter" type="checkbox" style="width:auto; margin:0;" />
+                Cover letter
+              </label>
+            </div>
+<button class="co-action" id="co_generate" type="button">Generate</button>
             <button class="co-action secondary" id="co_logout" type="button">Logout</button>
 
             <div class="co-muted">First time: set base resume via backend PUT /v1/users/{user_id}/base-resume</div>
@@ -682,6 +695,9 @@ async function updateExistsForSelected(root, cardEl, jobUrl) {
       company: root.querySelector("#co_company"),
       position: root.querySelector("#co_position"),
       jd: root.querySelector("#co_jd"),
+      resume_format: root.querySelector("#co_resume_format"),
+      cover_letter: root.querySelector("#co_cover_letter"),
+
       generate: root.querySelector("#co_generate"),
       logout: root.querySelector("#co_logout"),
     };
@@ -761,14 +777,17 @@ async function updateExistsForSelected(root, cardEl, jobUrl) {
         company: els.company.value.trim(),
         position: els.position.value.trim(),
         source_site: els.source_site.value.trim(),
+        resume_format: (els.resume_format?.value || "docx").trim(),
+        cover_letter: !!els.cover_letter?.checked,
       });
     }
     ["change", "blur"].forEach((ev) => {
       els.company.addEventListener(ev, saveAppSettings);
       els.position.addEventListener(ev, saveAppSettings);
       els.source_site.addEventListener(ev, saveAppSettings);
+      els.resume_format?.addEventListener(ev, saveAppSettings);
     });
-
+    els.cover_letter?.addEventListener("change", saveAppSettings);
     // URL blur triggers re-check
     els.url.addEventListener("blur", () => {
       refreshExistsInList(root, card, els.url).catch(() => {});
@@ -874,7 +893,8 @@ async function updateExistsForSelected(root, cardEl, jobUrl) {
       const position = (els.position.value || "").trim();
       const jdText = (els.jd.value || "").trim();
       const sourceSite = (els.source_site.value || "").trim();
-
+      const resumeFormat = (els.resume_format?.value || "docx").trim();
+      const wantCoverLetter = !!els.cover_letter?.checked;
       if (
         !selected.length ||
         !jobUrl ||
@@ -911,34 +931,138 @@ async function updateExistsForSelected(root, cardEl, jobUrl) {
               position,
               source_site: sourceSite, // ✅ new
               jd_text: jdText, // keep for backward compatibility
+              include_cover_letter: wantCoverLetter,
             },
           });
-
+          console.log("response:", r);
           if (!r.ok) {
             failures.push({ uid, status: r.status });
             continue;
           }
 
           const data = r.data || {};
-          if (!data.resume_docx_base64) {
-            failures.push({ uid, status: "missing_docx" });
+          const backendBase = (els.backend?.value || "" || BACKEND_DEFAULT)
+            .trim()
+            .replace(/\/$/, "");
+          const appId = data.application_id || data.applicationId || "";
+          const baseFolder = `CareerOS/${uid}/${appId || "application"}`;
+
+          async function downloadHttpUrl(url, filename) {
+            const resp = await chrome.runtime.sendMessage({
+              type: "DOWNLOAD_BLOB_URL",
+              payload: { url, filename, saveAs: true },
+            });
+            return !!resp?.ok;
+          }
+
+          let downloaded = false;
+
+          // ---- Backend v2: returns file ids + download urls (+ cover letter text)
+          const docxRel =
+            data.resume_docx_download_url ||
+            (data.resume_docx_file_id
+              ? `/v1/files/${data.resume_docx_file_id}/download`
+              : null);
+
+          const pdfRel =
+            data.resume_pdf_download_url ||
+            (data.resume_pdf_file_id
+              ? `/v1/files/${data.resume_pdf_file_id}/download`
+              : null);
+
+          const docxUrlAbs = docxRel
+            ? docxRel.startsWith("http")
+              ? docxRel
+              : backendBase + docxRel
+            : null;
+
+          const pdfUrlAbs = pdfRel
+            ? pdfRel.startsWith("http")
+              ? pdfRel
+              : backendBase + pdfRel
+            : null;
+
+          if (docxUrlAbs || pdfUrlAbs) {
+            if (resumeFormat === "pdf") {
+              if (pdfUrlAbs) {
+                downloaded = await downloadHttpUrl(
+                  pdfUrlAbs,
+                  `${baseFolder}/resume.pdf`
+                );
+              } else if (docxUrlAbs) {
+                // fallback
+                downloaded = await downloadHttpUrl(
+                  docxUrlAbs,
+                  `${baseFolder}/resume.docx`
+                );
+              }
+            } else if (resumeFormat === "both") {
+              let ok1 = false;
+              let ok2 = false;
+              if (docxUrlAbs)
+                ok1 = await downloadHttpUrl(
+                  docxUrlAbs,
+                  `${baseFolder}/resume.docx`
+                );
+              if (pdfUrlAbs)
+                ok2 = await downloadHttpUrl(
+                  pdfUrlAbs,
+                  `${baseFolder}/resume.pdf`
+                );
+              downloaded = ok1 || ok2;
+            } else {
+              // default docx
+              if (docxUrlAbs) {
+                downloaded = await downloadHttpUrl(
+                  docxUrlAbs,
+                  `${baseFolder}/resume.docx`
+                );
+              } else if (pdfUrlAbs) {
+                // fallback
+                downloaded = await downloadHttpUrl(
+                  pdfUrlAbs,
+                  `${baseFolder}/resume.pdf`
+                );
+              }
+            }
+
+            if (!downloaded) {
+              failures.push({ uid, status: "download_failed" });
+              continue;
+            }
+
+            // Optional cover letter: download as .txt
+            if (wantCoverLetter && data.cover_letter) {
+              const clText = String(data.cover_letter || "").trim();
+              if (clText) {
+                const clBlob = new Blob([clText], { type: "text/plain" });
+                const clUrl = URL.createObjectURL(clBlob);
+                await downloadHttpUrl(clUrl, `${baseFolder}/cover_letter.txt`);
+                setTimeout(() => URL.revokeObjectURL(clUrl), 30_000);
+              }
+            }
+
+            okCount++;
             continue;
           }
 
-          const docxUrl = b64ToBlobUrl(data.resume_docx_base64, mime);
-          const filename = `CareerOS/${uid}/${data.application_id}/resume.docx`;
+          // ---- Backward compatibility (older backend): base64 docx in response
+          if (data.resume_docx_base64) {
+            const docxUrl = b64ToBlobUrl(data.resume_docx_base64, mime);
+            const filename = `${baseFolder}/resume.docx`;
 
-          const resp = await chrome.runtime.sendMessage({
-            type: "DOWNLOAD_BLOB_URL",
-            payload: { url: docxUrl, filename, saveAs: true },
-          });
+            const ok = await downloadHttpUrl(docxUrl, filename);
+            if (!ok) {
+              failures.push({ uid, status: "download_failed" });
+              continue;
+            }
 
-          if (!resp?.ok) {
-            failures.push({ uid, status: "download_failed" });
+            okCount++;
             continue;
           }
 
-          okCount++;
+          failures.push({ uid, status: "missing_files" });
+          continue;
         }
 
         if (failures.length) {
@@ -967,12 +1091,17 @@ async function updateExistsForSelected(root, cardEl, jobUrl) {
         "company",
         "position",
         "source_site",
+        "resume_format",
+        "cover_letter",
       ]);
 
       els.backend.value = data.backend || BACKEND_DEFAULT;
       els.company.value = data.company || "";
       els.position.value = data.position || "";
       els.source_site.value = data.source_site || "";
+      if (els.resume_format)
+        els.resume_format.value = data.resume_format || "docx";
+      if (els.cover_letter) els.cover_letter.checked = !!data.cover_letter;
       els.url.value = location.href;
 
       await pushAuthToBackground({
